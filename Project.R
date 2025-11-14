@@ -40,7 +40,10 @@ games_processed <- games %>%
     outcome = case_when(
       result == "1-0" ~ 3,
       result == "1/2-1/2" ~ 2,
-      result == "0-1" ~ 1
+      result == "0-1" ~ 1 #,
+      #time = as.numeric(sub("\\+.*", "", timecontrol)),
+      #increment = as.numeric(sub(".*\\+", "", timecontrol)),
+      #calGameTime = time + 40 * increment
     )
   )
 games_processed$outcome = as.numeric(games_processed$outcome)
@@ -58,6 +61,7 @@ stan_data <- list(
   white_id = games_processed$white_id,
   black_id = games_processed$black_id,
   outcome = games_processed$outcome
+  #t = games_processed$calGameTime
 )
 
 # Fit the model

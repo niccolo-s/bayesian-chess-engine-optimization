@@ -17,12 +17,14 @@ data {
   array[N] int<lower=1, upper=K> black_id;
   // vector<lower=0, upper=1>[N] white_score;
   array[N] int<lower=0, upper=3> outcome;
+  # vector[N] t;
 }
 
 // The parameters accepted by the model. Our model
 // accepts the engines' ratings.
 parameters {
   vector[K] rating;
+  #vector[K] rating_time;
 }
 
 // The model to be estimated. We model the output
@@ -30,6 +32,7 @@ parameters {
 // and standard deviation 'sigma'.
 model {
   rating ~ normal(2000, 200);     // parameters' prior
+  # rating_time ~ normal(0, 0.1); // aka beta
   
   // anchor raiting mean around 2000
   mean(rating) ~ normal(2000, 10);
@@ -48,6 +51,11 @@ model {
     probs[3] = p_white * (1 - p_draw);         // White wins
     
     outcome[i] ~ categorical(probs);
+    #real rating_white = rating[white_id[i]] + rating_time[white_id[i]] * t[i];
+    #real rating_black = rating[black_id[i]] + rating_time[black_id[i]] * t[i];
+    #real rating_delta = rating_white - rating_black;
+    #real expected_score = 1.0 / (1.0 + 10^(-rating_delta / 400.0));
+    #white_score[i] ~ normal(expected_score, 0.25);
   }
 }
 
