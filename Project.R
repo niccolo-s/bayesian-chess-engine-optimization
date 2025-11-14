@@ -15,6 +15,21 @@ engine_ids <- data.frame(
 )
 
 
+# games_processed <- games %>%
+#   left_join(engine_ids, by = c("white" = "engine")) %>%
+#   rename(white_id = id) %>%
+#   left_join(engine_ids, by = c("black" = "engine")) %>%
+#   rename(black_id = id) %>%
+#   # create scores column
+#   mutate(
+#     white_score = case_when(
+#       result == "1-0" ~ 1,
+#       result == "1/2-1/2" ~ 0.5,
+#       result == "0-1" ~ 0
+#     )
+#   )
+# games_processed
+
 games_processed <- games %>%
   left_join(engine_ids, by = c("white" = "engine")) %>%
   rename(white_id = id) %>%
@@ -22,14 +37,16 @@ games_processed <- games %>%
   rename(black_id = id) %>%
   # create scores column
   mutate(
-    white_score = case_when(
-      result == "1-0" ~ 1,
-      result == "1/2-1/2" ~ 0.5,
-      result == "0-1" ~ 0
+    outcome = case_when(
+      result == "1-0" ~ 3,
+      result == "1/2-1/2" ~ 2,
+      result == "0-1" ~ 1
     )
   )
-games_processed
+games_processed$outcome = as.numeric(games_processed$outcome)
 
+length(which(games_processed$outcome==2))
+summary(games_processed)
 
 
 
@@ -40,7 +57,7 @@ stan_data <- list(
   K = length(unique_engines),
   white_id = games_processed$white_id,
   black_id = games_processed$black_id,
-  white_score = games_processed$white_score
+  outcome = games_processed$outcome
 )
 
 # Fit the model
@@ -83,6 +100,12 @@ for (i in 1:n_engines) {
   }
 }
 superiority_matrix
+
+
+
+
+
+
 
 
 
