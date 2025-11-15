@@ -111,7 +111,7 @@ superiority_matrix
 
 ## Time controls ----------
 # Define the 4 time controls you want to evaluate
-time_controls <- c(15, 60, 240, 600)  
+time_controls <- c(15, 60, 260, 600)  
 
 # Extract the posterior for betas  
 beta_draws <- fit$draws(variables = "beta", format = "matrix")
