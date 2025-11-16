@@ -229,3 +229,62 @@ combined_plot <- combined_plot +
 
 print(combined_plot)
 ggsave("all_engines_rating_curves.png", combined_plot, width = 16, height = 10, dpi = 300)
+
+# Extract the raw MCMC samples for "SM"
+sm_idx <- which(unique_engines == "SM")
+sm_raw_samples <- ratings_draws[, sm_idx]
+
+# Create a data frame for "SM" MCMC samples
+sm_df <- data.frame(rating = sm_raw_samples)
+# Rename the column from "rating.2." to "rating"
+colnames(sm_df) <- "rating"
+# Create histogram of MCMC samples for "SM"
+sm_histogram <- ggplot(sm_df, aes(x = rating)) +
+  # Histogram with default binwidth (keeping it as you prefer)
+  geom_histogram(
+    binwidth = 5,  # You mentioned binwidth is fine, keeping as is
+    fill = "#383D78", 
+    color = "grey", 
+    alpha = 0.7
+  ) +
+  # Add kernel density estimate (KDE) with manually specified bandwidth
+  geom_density(
+    aes(y = after_stat(density) * nrow(sm_df) * 5),
+    color = "#383D78",
+    size = 2,
+    alpha = 0.3,
+    adjust = 2
+  ) +
+  geom_vline(
+    xintercept = mean(sm_df$rating), # Calculate the mean of the rating column
+    linetype = "dashed",            
+    color = "red",              
+    linewidth = 2                    
+  ) +
+  annotate(
+    "text",
+    x = mean(sm_df$rating),                                            # Anchor x-position at the mean line
+    y = Inf,                                                           # Place at the top of the plot area (Inf = maximum y)
+    label = paste("Mean:", round(mean(sm_df$rating), 2)),              # Formats "Mean: value"
+    color = "red",
+    size = 4,
+    hjust = -0.1,                                                      # Nudges text slightly to the right of the x-position
+    vjust = 1.5                                                        # Nudges text down from the top edge
+  ) +
+  labs(
+    title = paste("Histogram of MCMC Samples for Engine 'SM'"),
+    x = "Rating",
+    y = "Number of Samples"  
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.text = element_text(size = 10),
+    axis.title = element_text(size = 12)
+  )
+
+# Print the standalone histogram with KDE
+print(sm_histogram)
+
+# Optionally, save it as an image
+ggsave("SM_histogram_with_kde.png", sm_histogram, width = 8, height = 6, dpi = 300)
