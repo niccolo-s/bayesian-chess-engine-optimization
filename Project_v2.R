@@ -222,3 +222,37 @@ bayesplot::ppc_dens_overlay(stan_data$outcome, y_rep[1500:2000,])
 
 
 
+#------------------------------------------
+#Basic Posterior Predictive (MODEL CHECKING)
+#------------------------------------------
+
+y_rep <- fit$draws("y_rep", format = "matrix")
+y <- stan_data$outcome
+
+# 1. Grouped bar plots by engine or time control
+ppc_bars_grouped(y, y_rep[500:1000, ], 
+                 group = games_processed$black,  # or black, or time control
+                 freq = FALSE,  # show proportions instead of counts
+                 prob = 0.9)
+
+# 2. Basic distribution comparison grouped by outcome (MOST IMPORTANT for categorical data)
+ppc_bars_grouped(y, y_rep[1:1000, ], 
+                 group = factor(y, labels = c("Black", "Draw", "White")))
+
+# Distribution Comparisons
+# 6. Histogram comparison (first 8 replicates - lecture style)
+ppc_hist(y, y_rep[1:8, ])
+
+# 7. Density overlay (already using, but here's the syntax)
+ppc_dens_overlay(y, y_rep[1:50, ])
+
+# 8. Empirical CDF differences
+ppc_ecdf_overlay_grouped(y, y_rep[1:100, ], group = games_processed$white)
+
+#Probability Integral Transform (PIT)
+# 9. Grouped PIT
+ppc_pit_ecdf_grouped(y, y_rep, 
+                     group = games_processed$white)
+
+
+
