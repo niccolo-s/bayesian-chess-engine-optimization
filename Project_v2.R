@@ -142,19 +142,16 @@ tc_range <- seq(0, max(games_processed$tc), length.out = 100)
 # Initialize plot list
 plots <- list()
 
-# Uncertainty plot
 for (engine_idx in 1:length(unique_engines)) {
   engine_name <- unique_engines[engine_idx]
   
-  # Compute ratings for all tc
+  # Compute posterior ratings
   ratings_matrix <- matrix(NA, nrow = dim(posterior$rating)[1], ncol = length(tc_range))
-  
   for (i in 1:dim(posterior$rating)[1]) {
-    ratings_matrix[i, ] <- posterior$rating[i, engine_idx] + 
+    ratings_matrix[i, ] <- posterior$rating[i, engine_idx] +
       posterior$beta[i, engine_idx] * tc_range
   }
   
-  # Compute statistics
   rating_data <- data.frame(
     tc = tc_range,
     mean = apply(ratings_matrix, 2, mean),
@@ -163,53 +160,105 @@ for (engine_idx in 1:length(unique_engines)) {
     upper_95 = apply(ratings_matrix, 2, quantile, 0.975)
   )
   
-  # Subplot
-  plots[[engine_idx]] <- ggplot(rating_data, aes(x = tc, y = mean)) +
+  # Build ribbon data
+  ribbons <- bind_rows(
+    rating_data %>% transmute(tc, ymin = lower_95, ymax = upper_95, interval = "95% CI"),
+    rating_data %>% transmute(tc, ymin = mean - sd, ymax = mean + sd, interval = "±1 SD")
+  )
+  
+  # Points for predicted ratings
+  pts <- all_tiers %>% 
+    filter(engine == engine_name) %>% 
+    mutate(type = "Mean rating at relevant time control")
+  
+  plots[[engine_idx]] <-
+    ggplot() +
+    # Ribbons
     geom_ribbon(
-      aes(ymin = lower_95, ymax = upper_95),
-      fill = "lightblue",
-      alpha = 0.4
+      data = ribbons,
+      aes(x = tc, ymin = ymin, ymax = ymax, fill = interval),
+      alpha = 0.5
     ) +
-    geom_ribbon(
-      aes(ymin = mean - sd, ymax = mean + sd),
-      fill = "steelblue",
-      alpha = 0.6
+    # Mean line
+    geom_line(
+      data = rating_data,
+      aes(x = tc, y = mean, color = "Mean rating"),
+      size = 1.2
     ) +
-    geom_line(linewidth = 1.2, color = "darkblue") +
+    # Predicted rating points (now included in legend)
     geom_point(
-      data = all_tiers %>% filter(engine == engine_name),
-      aes(x = tc, y = mean_rating),
-      size = 3,
-      color = "red",
-      inherit.aes = FALSE
+      data = pts,
+      aes(x = tc, y = mean_rating, color = type),
+      size = 3
     ) +
-    labs(
-      title = engine_name,
-      x = "Time Control (sec)",
-      y = "Rating"
+    # Legend mappings
+    scale_fill_manual(
+      # *** MODIFICA 1: Rimuovi il titolo ***
+      name = NULL,
+      values = c("95% CI" = "lightblue", "±1 SD" = "steelblue")
     ) +
+    scale_color_manual(
+      # *** MODIFICA 2: Rimuovi il titolo ***
+      name = NULL,
+      values = c(
+        "Mean rating" = "darkblue",
+        "Mean rating at relevant time control" = "red"
+      )
+    ) +
+    labs(tag = engine_name, x = "Time Control (sec)", y = "Rating") + 
     theme_minimal() +
     theme(
-      plot.title = element_text(face = "bold", size = 11, hjust = 0.5),
-      axis.text = element_text(size = 9),
-      axis.title = element_text(size = 10)
+      plot.tag.position = c(0.6,1), 
+      plot.tag = element_text(size = 12, face = "bold", hjust = 0.5), 
+      legend.position = "none",
+      # Increase text size
+      axis.text = element_text(size = 14),  # Larger axis tick labels for both x and y
+      axis.text.x = element_text(size = 11),  # Smaller x-axis tick labels if needed
+      axis.title = element_text(size = 14), # Larger axis titles
+      plot.title = element_text(size = 16, face = "bold", margin = margin(r = 10)), # Larger plot title
+      legend.text = element_text(size = 12), # Larger legend text
+      # Adjust Y-axis label to move it left
+      axis.title.y = element_text(margin = margin(r = 10), size = 14),  # Moves Y-axis title to the left
+      # Optionally adjust Y-axis tick size if desired
+      axis.text.y = element_text(size = 12),
+      axis.title.x = element_text(margin = margin(t = 10), size = 12)
     )
 }
 
-# Combine in grid 2×3
-combined_plot <- wrap_plots(plots, nrow = 2, ncol = 3)
+layout_design <- c(
+  area(t = 1.1, b = 1.1, l = 1, r = 3), area(t = 2.1, b = 3, l = 1, r = 3) 
+)
 
+combined_plot <- wrap_plots(
+  A = guide_area(), 
+  Plots = wrap_plots(plots, nrow = 2, ncol = 3), 
+  design = layout_design
+) +
+  plot_layout(guides = "collect", heights = c(0.1, 1)) & 
+  theme(
+    legend.position = "top",
+    legend.box = "horizontal",
+    # Custom margins
+    plot.margin = margin(t = 5, r = 10, b = 15, l = 10), 
+    legend.background = element_rect(color = "black", size = 0.5),
+    legend.key = element_blank(),
+    legend.key.size = unit(1, "cm"),
+    plot.title = element_text(hjust = 0.5),
+    legend.text = element_text(size = 12)
+  )
+
+# Main title
 combined_plot <- combined_plot + 
   plot_annotation(
     title = "Rating Curves for All Engines",
-    subtitle = "Dark ribbon = ±1 SD, Light ribbon = 95% CI, Red points = observed ratings",
     theme = theme(
-      plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
-      plot.subtitle = element_text(size = 11, hjust = 0.5)
+      plot.title = element_text(face = "bold", size = 16, hjust = 0.5)
     )
   )
 
+# Display the plot
 print(combined_plot)
+
 ggsave("all_engines_rating_curves.png", combined_plot, width = 16, height = 10, dpi = 300)
 
 
