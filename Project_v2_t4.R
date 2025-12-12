@@ -138,178 +138,227 @@ for (tc_val in time_controls) {
 
 
 
+
+
 #------------------------------------------
-#4th task (MODEL CHECKING)
-#------------------------------------------ 
+# Task 4: Sequential Testing Development
+#------------------------------------------
+# 1. Extract Parameters from Fitted Model -------------------------------------
+posterior_summary <- fit$summary()
 
-# --- 1. EXTRACT FIXED PARAMETERS FROM STAN MODEL ---
-# We extract the global parameters (white_advantage, draw parameters) from the 
-# previously fitted model. These will be treated as known constants for the SPRT.
+# Extract global parameters
+white_adv   <- posterior_summary$mean[posterior_summary$variable == "white_advantage"]
+p_draw_base <- posterior_summary$mean[posterior_summary$variable == "p_draw_base"]
+draw_scale  <- posterior_summary$mean[posterior_summary$variable == "draw_scale"]
 
-draws_summary <- fit$summary(
-  variables = c("white_advantage", "p_draw_base", "draw_scale"),
-  "mean"
-)
+# Extract BOTH rating and beta for each engine
+engine_params <- data.frame(
+  engine_id = 1:length(unique_engines),
+  engine = unique_engines
+) %>%
+  mutate(
+    rating = sapply(engine_id, function(i) {
+      posterior_summary$mean[posterior_summary$variable == paste0("rating[", i, "]")]
+    }),
+    beta = sapply(engine_id, function(i) {
+      posterior_summary$mean[posterior_summary$variable == paste0("beta[", i, "]")]
+    })
+  )
 
-# Store parameters in a list for easy access
-global_params <- list(
-  white_adv = draws_summary$mean[draws_summary$variable == "white_advantage"],
-  p_draw_base = draws_summary$mean[draws_summary$variable == "p_draw_base"],
-  draw_scale = draws_summary$mean[draws_summary$variable == "draw_scale"]
-)
+# 2. Sequential Test Function (CORRECTED SPRT) --------------------------------
+# Tests H0: Delta = 0 (No improvement)
+#    vs H1: Delta = E0 (Improvement by E0)
+# Where Delta is the TRUE rating difference at the ACTUAL time control
 
-# --- 2. SEQUENTIAL TEST FUNCTION (BAYES FACTOR / SPRT) ---
-# This function implements the Sequential Probability Ratio Test (SPRT).
-# Instead of calculating the full posterior density (Grid Approach), we compare
-# two specific point hypotheses: H0 (No improvement) vs H1 (Improvement by E0).
-# This approach is computationally very efficient and adheres to standard SPRT methodology.
-#
-# Arguments:
-#   games_df: DataFrame containing the sequence of games
-#   engine_A: The 'new' engine (Challenger)
-#   engine_B: The 'base' engine (Defender)
-#   params:   Global chess parameters (white_adv, etc.)
-#   E0:       The improvement margin in Elo to test for (default 10)
-#   alpha:    Threshold for accepting H1 (default 20, corresponds to strong evidence)
-#   beta:     Threshold for accepting H0 (default 1/20)
-
-run_seq_test_bf <- function(games_df, engine_A, engine_B, params, E0 = 10, alpha = 20, beta = 1/20) {
+sequential_test <- function(games_subset, new_engine, base_engine, 
+                            engine_params, E0 = 10, 
+                            alpha = 0.05, beta_param = 0.05) {
   
-  # Initialize Bayes Factor (BF).
-  # BF starts at 1, implying equal prior odds (1:1) for H0 and H1.
-  bayes_factor <- 1
+  # Get parameters for both engines
+  new_params  <- engine_params %>% filter(engine == new_engine)
+  base_params <- engine_params %>% filter(engine == base_engine)
   
-  # Storage for history (to analyze trajectory later)
-  history_bf <- numeric(nrow(games_df))
-  decision <- "Undecided"
-  stopped_at <- nrow(games_df)
+  # SPRT boundaries
+  bound_A <- log(beta_param / (1 - alpha))      # Accept H0
+  bound_B <- log((1 - beta_param) / alpha)      # Accept H1
   
-  # Define the two hypotheses to be compared:
-  # H0: The rating difference is 0 (The new engine is not better).
-  # H1: The rating difference is exactly E0 (The new engine has improved).
-  elo0 <- 0   # Null Hypothesis value (Delta = 0)
-  elo1 <- E0  # Alternative Hypothesis value (Delta = E0)
+  LLR <- 0  # Log-likelihood ratio
   
-  # Iterate through games sequentially
-  for (i in 1:nrow(games_df)) {
-    game <- games_df[i, ]
-    is_A_white <- (game$white == engine_A)
+  for (i in 1:nrow(games_subset)) {
+    game <- games_subset[i, ]
+    tc <- game$tc
     
-    # --- 1. Calculate Likelihoods under H0 (Elo Diff = 0) ---
-    # Determine effective rating difference from White's perspective including advantage
-    diff0 <- if(is_A_white) { elo0 + params$white_adv } else { -elo0 + params$white_adv }
+    # Calculate EFFECTIVE ratings at this specific time control
+    # This is what the engines ACTUALLY play at
+    rating_new_tc  <- new_params$rating + new_params$beta * tc
+    rating_base_tc <- base_params$rating + base_params$beta * tc
     
-    # Calculate probabilities using the Bradley-Terry model (Sigmoid)
-    exp_score0 <- 1.0 / (1.0 + 10^(-diff0 / 400.0))
-    # Draw probability model (decaying exponential)
-    p_draw0 <- params$p_draw_base * exp(-abs(diff0) / params$draw_scale)
+    # --- H0: No improvement (Delta = 0) ---
+    # Under H0, the effective ratings are equal: rating_new_tc = rating_base_tc
+    # So the difference from White's perspective is just white advantage
     
-    # Probabilities for outcomes: [1: Black Win, 2: Draw, 3: White Win]
-    probs0 <- c(
-      (1 - p_draw0) * (1 - exp_score0), 
-      p_draw0,                          
-      (1 - p_draw0) * exp_score0        
+    if (game$white == new_engine) {
+      # New plays White
+      # Diff = (rating_new_tc - rating_base_tc) + white_adv
+      # Under H0: rating_new_tc = rating_base_tc, so Diff = 0 + white_adv
+      diff_H0 <- 0 + white_adv
+    } else {
+      # Base plays White
+      # Diff = (rating_base_tc - rating_new_tc) + white_adv
+      # Under H0: rating_base_tc = rating_new_tc, so Diff = 0 + white_adv
+      diff_H0 <- 0 + white_adv
+    }
+    
+    # Calculate probabilities under H0
+    exp_score_H0 <- 1 / (1 + 10^(-diff_H0 / 400))
+    p_draw_H0    <- p_draw_base * exp(-abs(diff_H0) / draw_scale)
+    
+    probs_H0 <- c(
+      (1 - p_draw_H0) * (1 - exp_score_H0), # Black win
+      p_draw_H0,                            # Draw
+      (1 - p_draw_H0) * exp_score_H0        # White win
     )
     
-    # --- 2. Calculate Likelihoods under H1 (Elo Diff = E0) ---
-    # Repeat calculation for the alternative hypothesis
-    diff1 <- if(is_A_white) { elo1 + params$white_adv } else { -elo1 + params$white_adv }
-    exp_score1 <- 1.0 / (1.0 + 10^(-diff1 / 400.0))
-    p_draw1 <- params$p_draw_base * exp(-abs(diff1) / params$draw_scale)
+    # --- H1: New engine better by E0 ---
+    # Under H1, new engine's effective rating is E0 higher
     
-    probs1 <- c(
-      (1 - p_draw1) * (1 - exp_score1), 
-      p_draw1,                          
-      (1 - p_draw1) * exp_score1        
+    if (game$white == new_engine) {
+      # New plays White
+      # Diff = (rating_new_tc + E0 - rating_base_tc) + white_adv
+      # Under H1: rating_new_tc = rating_base_tc + E0
+      # So: Diff = (rating_base_tc + E0 - rating_base_tc) + white_adv = E0 + white_adv
+      diff_H1 <- E0 + white_adv
+    } else {
+      # Base plays White
+      # Diff = (rating_base_tc - (rating_new_tc + E0)) + white_adv
+      # Under H1: Diff = (rating_base_tc - rating_base_tc - E0) + white_adv = -E0 + white_adv
+      diff_H1 <- -E0 + white_adv
+    }
+    
+    # Calculate probabilities under H1
+    exp_score_H1 <- 1 / (1 + 10^(-diff_H1 / 400))
+    p_draw_H1    <- p_draw_base * exp(-abs(diff_H1) / draw_scale)
+    
+    probs_H1 <- c(
+      (1 - p_draw_H1) * (1 - exp_score_H1),
+      p_draw_H1,
+      (1 - p_draw_H1) * exp_score_H1
     )
     
-    # --- 3. Update Bayes Factor based on actual game outcome ---
-    # game$outcome should be: 1 (Black Win), 2 (Draw), or 3 (White Win)
+    # Update LLR
     outcome_idx <- game$outcome
+    lik_H1 <- max(probs_H1[outcome_idx], 1e-10)
+    lik_H0 <- max(probs_H0[outcome_idx], 1e-10)
     
-    lik_H0 <- probs0[outcome_idx]
-    lik_H1 <- probs1[outcome_idx]
+    LLR <- LLR + log(lik_H1 / lik_H0)
     
-    # Update Rule: BF_new = BF_old * (Likelihood(Data|H1) / Likelihood(Data|H0))
-    # This represents how much more likely the observed data is under H1 compared to H0.
-    bayes_factor <- bayes_factor * (lik_H1 / lik_H0)
-    history_bf[i] <- bayes_factor
-    
-    # --- 4. Check Stopping Conditions ---
-    # If BF > alpha (e.g., 20), evidence overwhelmingly supports H1
-    if (bayes_factor > alpha) {
-      decision <- paste(engine_A, "is better (Accept H1)")
-      stopped_at <- i
-      break
-      # If BF < beta (e.g., 1/20), evidence overwhelmingly supports H0
-    } else if (bayes_factor < beta) {
-      decision <- paste(engine_A, "is NOT better (Accept H0)")
-      stopped_at <- i
-      break
+    # Check stopping conditions
+    if (LLR >= bound_B) {
+      return(list(
+        decision = "H1: New engine better",
+        games_played = i,
+        total_available = nrow(games_subset),
+        final_LLR = LLR
+      ))
+    } else if (LLR <= bound_A) {
+      return(list(
+        decision = "H0: New engine NOT better",
+        games_played = i,
+        total_available = nrow(games_subset),
+        final_LLR = LLR
+      ))
     }
   }
   
-  # Return results list
   return(list(
-    pair = paste(engine_A, "vs", engine_B),
-    decision = decision,
-    stopped_at = stopped_at,
-    total_games = nrow(games_df),
-    final_bf = ifelse(i > 0, history_bf[i], 1),
-    bf_history = history_bf[1:i]
+    decision = "Undecided",
+    games_played = nrow(games_subset),
+    total_available = nrow(games_subset),
+    final_LLR = LLR
   ))
 }
 
-# --- 3. RUN SIMULATION ON ALL PAIRS ---
+# 3. Run Simulation -----------------------------------------------------------
 
-# Generate all unique pairs from the dataset
-engines <- unique_engines
-pairs <- combn(engines, 2, simplify = FALSE)
+pairings <- games_processed %>%
+  select(white, black) %>%
+  mutate(pair = paste(white, black, sep = " vs ")) %>%
+  distinct(pair, .keep_all = TRUE)
 
-results_list <- list()
+results <- list()
 
-cat("\n=== STARTING SPRT SIMULATION (Bayes Factor Approach) ===\n")
+cat("\n=== STARTING SPRT SIMULATION ===\n")
+cat("E0 = 10 Elo | alpha = 0.05 | beta = 0.05\n\n")
 
-for (p in pairs) {
-  eng1 <- p[1]
-  eng2 <- p[2]
+for (i in 1:nrow(pairings)) {
+  new_eng <- pairings$white[i]
+  base_eng <- pairings$black[i]
   
-  # Filter games for this specific pair
   pair_games <- games_processed %>%
-    filter((white == eng1 & black == eng2) | (white == eng2 & black == eng1)) %>%
-    # Ensure chronological order
-    arrange(row_number()) 
+    filter((white == new_eng & black == base_eng) | 
+             (black == new_eng & white == base_eng))
   
   if (nrow(pair_games) > 0) {
-    # Run the SPRT test
-    # using alpha=20 (strong evidence) and beta=1/20
-    res <- run_seq_test_bf(pair_games, eng1, eng2, global_params, E0 = 10, alpha = 8, beta = 1/8)
+    result <- sequential_test(pair_games, new_eng, base_eng, 
+                              engine_params, E0 = 10, 
+                              alpha = 0.20, beta_param = 0.20)
     
-    results_list[[length(results_list) + 1]] <- res
+    results[[i]] <- data.frame(
+      Pair = paste(new_eng, "vs", base_eng),
+      New_Engine = new_eng,
+      Base_Engine = base_eng,
+      Decision = result$decision,
+      Games_Played = result$games_played,
+      Total_Available = result$total_available,
+      Final_LLR = round(result$final_LLR, 2)
+    )
     
-    # Print status
-    cat(sprintf("Pair %-15s: %-30s (Stopped at game %d / %d)\n", 
-                res$pair, res$decision, res$stopped_at, nrow(pair_games)))
+    cat(sprintf("%-30s: %-30s (%d/%d games)\n", 
+                results[[i]]$Pair, result$decision, 
+                result$games_played, result$total_available))
   }
 }
 
-# --- 4. SUMMARY TABLE ---
-# Convert results to a clean DataFrame for reporting
-results_df <- do.call(rbind, lapply(results_list, function(x) {
-  data.frame(
-    Pair = x$pair,
-    Decision = x$decision,
-    Games_Played = x$stopped_at,
-    Total_Games = x$total_games,
-    Final_BF = round(x$final_bf, 2)
-  )
-}))
+# 4. Analysis -----------------------------------------------------------------
 
+results_df <- bind_rows(results)
+
+results_analysis <- results_df %>%
+  left_join(rating_df %>% select(engine, mean_rating), 
+            by = c("New_Engine" = "engine")) %>%
+  rename(Rating_New = mean_rating) %>%
+  left_join(rating_df %>% select(engine, mean_rating),
+            by = c("Base_Engine" = "engine")) %>%
+  rename(Rating_Base = mean_rating) %>%
+  mutate(
+    Model_Rating_Diff = Rating_New - Rating_Base,
+    Test_Concluded = Decision != "Undecided",
+    Conclusion_Type = case_when(
+      Decision == "H1: New engine better" ~ "Better",
+      Decision == "H0: New engine NOT better" ~ "Not Better",
+      TRUE ~ "Undecided"
+    )
+  )
+
+cat("\n=== RESULTS SUMMARY ===\n")
 print(results_df)
 
+cat("\n=== RELATIONSHIP TO RATING LIST ===\n")
+cat("\nPairs where H1 accepted (New is better):\n")
+print(results_analysis %>%
+        filter(Conclusion_Type == "Better") %>%
+        arrange(desc(Model_Rating_Diff)) %>%
+        select(Pair, Model_Rating_Diff, Games_Played))
 
+cat("\nPairs where H0 accepted (New is NOT better):\n")
+print(results_analysis %>%
+        filter(Conclusion_Type == "Not Better") %>%
+        arrange(Model_Rating_Diff) %>%
+        select(Pair, Model_Rating_Diff, Games_Played))
 
-
-
-
+cat("\nPairs where test did not conclude:\n")
+print(results_analysis %>%
+        filter(Conclusion_Type == "Undecided") %>%
+        arrange(abs(Model_Rating_Diff)) %>%
+        select(Pair, Model_Rating_Diff, Games_Played, Total_Available))
 
