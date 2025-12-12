@@ -9,7 +9,7 @@ data {
 
 parameters {
   vector[K] rating;
-  vector[K] beta;
+  vector[K] beta_tc;
   real white_advantage;
   real<lower=0, upper=1> p_draw_base;
   real<lower=0> draw_scale;
@@ -20,8 +20,8 @@ transformed parameters {
   vector[N] rating_black;
   
   for (i in 1:N) {
-    rating_white[i] = rating[white_id[i]] + beta[white_id[i]] * tc[i];
-    rating_black[i] = rating[black_id[i]] + beta[black_id[i]] * tc[i];
+    rating_white[i] = rating[white_id[i]] + beta_tc[white_id[i]] * tc[i];
+    rating_black[i] = rating[black_id[i]] + beta_tc[black_id[i]] * tc[i];
   }
 }
 
@@ -30,7 +30,7 @@ model {
   rating ~ normal(2000, 200);
   // anchoring
   mean(rating) ~ normal(2000, 10);
-  beta ~ normal(0, 0.1);
+  beta_tc ~ normal(0, 0.1);
   white_advantage ~ normal(35, 15);
   
   p_draw_base ~ beta(3, 7);
