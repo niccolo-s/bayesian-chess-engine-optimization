@@ -160,15 +160,15 @@ engine_params <- data.frame(
     rating = sapply(engine_id, function(i) {
       posterior_summary$mean[posterior_summary$variable == paste0("rating[", i, "]")]
     }),
+    # OVDJE JE PROMJENA: "beta[" u "beta_tc["
     beta = sapply(engine_id, function(i) {
-      posterior_summary$mean[posterior_summary$variable == paste0("beta[", i, "]")]
+      posterior_summary$mean[posterior_summary$variable == paste0("beta_tc[", i, "]")]
     })
   )
 
-# 2. Sequential Test Function (CORRECTED SPRT) --------------------------------
+# 2. Sequential Test Function (FINAL CORRECTED SPRT) --------------------------
 # Tests H0: Delta = 0 (No improvement)
 #    vs H1: Delta = E0 (Improvement by E0)
-# Where Delta is the TRUE rating difference at the ACTUAL time control
 
 sequential_test <- function(games_subset, new_engine, base_engine, 
                             engine_params, E0 = 10, 
@@ -188,28 +188,22 @@ sequential_test <- function(games_subset, new_engine, base_engine,
     game <- games_subset[i, ]
     tc <- game$tc
     
-    # Calculate EFFECTIVE ratings at this specific time control
-    # This is what the engines ACTUALLY play at
-    rating_new_tc  <- new_params$rating + new_params$beta * tc
-    rating_base_tc <- base_params$rating + base_params$beta * tc
+    # Calculate Time Control effect difference
+    # diff_tc = (Beta_New - Beta_Base) * tc
+    diff_tc <- (new_params$beta - base_params$beta) * tc
     
-    # --- H0: No improvement (Delta = 0) ---
-    # Under H0, the effective ratings are equal: rating_new_tc = rating_base_tc
-    # So the difference from White's perspective is just white advantage
-    
+    # --- H0: No improvement (Base Diff = 0) ---
     if (game$white == new_engine) {
-      # New plays White
-      # Diff = (rating_new_tc - rating_base_tc) + white_adv
-      # Under H0: rating_new_tc = rating_base_tc, so Diff = 0 + white_adv
-      diff_H0 <- 0 + white_adv
+      # New is White: (New - Base) + Adv
+      # Base Diff=0 -> Total = 0 + diff_tc + adv
+      diff_H0 <- 0 + diff_tc + white_adv
     } else {
-      # Base plays White
-      # Diff = (rating_base_tc - rating_new_tc) + white_adv
-      # Under H0: rating_base_tc = rating_new_tc, so Diff = 0 + white_adv
-      diff_H0 <- 0 + white_adv
+      # Base is White: (Base - New) + Adv
+      # Base Diff=0 -> Total = -(0 + diff_tc) + adv = -diff_tc + adv
+      diff_H0 <- -diff_tc + white_adv
     }
     
-    # Calculate probabilities under H0
+    # Probabilities H0
     exp_score_H0 <- 1 / (1 + 10^(-diff_H0 / 400))
     p_draw_H0    <- p_draw_base * exp(-abs(diff_H0) / draw_scale)
     
@@ -219,23 +213,18 @@ sequential_test <- function(games_subset, new_engine, base_engine,
       (1 - p_draw_H0) * exp_score_H0        # White win
     )
     
-    # --- H1: New engine better by E0 ---
-    # Under H1, new engine's effective rating is E0 higher
-    
+    # --- H1: Improvement (Base Diff = E0) ---
     if (game$white == new_engine) {
-      # New plays White
-      # Diff = (rating_new_tc + E0 - rating_base_tc) + white_adv
-      # Under H1: rating_new_tc = rating_base_tc + E0
-      # So: Diff = (rating_base_tc + E0 - rating_base_tc) + white_adv = E0 + white_adv
-      diff_H1 <- E0 + white_adv
+      # New is White: (New - Base) is E0
+      # Total = E0 + diff_tc + adv
+      diff_H1 <- E0 + diff_tc + white_adv
     } else {
-      # Base plays White
-      # Diff = (rating_base_tc - (rating_new_tc + E0)) + white_adv
-      # Under H1: Diff = (rating_base_tc - rating_base_tc - E0) + white_adv = -E0 + white_adv
-      diff_H1 <- -E0 + white_adv
+      # Base is White: (Base - New) is -E0
+      # Total = -E0 - diff_tc + adv
+      diff_H1 <- -E0 - diff_tc + white_adv
     }
     
-    # Calculate probabilities under H1
+    # Probabilities H1
     exp_score_H1 <- 1 / (1 + 10^(-diff_H1 / 400))
     p_draw_H1    <- p_draw_base * exp(-abs(diff_H1) / draw_scale)
     
@@ -278,6 +267,7 @@ sequential_test <- function(games_subset, new_engine, base_engine,
   ))
 }
 
+
 # 3. Run Simulation -----------------------------------------------------------
 
 pairings <- games_processed %>%
@@ -301,7 +291,7 @@ for (i in 1:nrow(pairings)) {
   if (nrow(pair_games) > 0) {
     result <- sequential_test(pair_games, new_eng, base_eng, 
                               engine_params, E0 = 10, 
-                              alpha = 0.20, beta_param = 0.20)
+                              alpha = 0.2, beta_param = 0.2)
     
     results[[i]] <- data.frame(
       Pair = paste(new_eng, "vs", base_eng),
