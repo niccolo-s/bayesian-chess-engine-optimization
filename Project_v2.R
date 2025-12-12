@@ -77,6 +77,26 @@ fit <- mod$sample(
   seed = 123
 )
 
+# # Save the fitted model
+# fit$save_object(file = "fitted_model_v2.rds")
+# Extract only model parameters (not transformed parameters)
+draws_df <- as_draws_df(fit$draws(variables = c("rating", "beta_tc", "white_advantage", 
+                                                "p_draw_base", "draw_scale")))
+saveRDS(draws_df, "posterior_samples.rds")
+
+
+# Extract posterior samples
+posterior_samples <- list(
+  rating = fit$draws("rating", format = "matrix"),
+  beta = fit$draws("beta", format = "matrix"),
+  white_advantage = fit$draws("white_advantage", format = "matrix"),
+  p_draw_base = fit$draws("p_draw_base", format = "matrix"),
+  draw_scale = fit$draws("draw_scale", format = "matrix")
+)
+
+saveRDS(posterior_samples, "posterior_samples.rds")
+
+
 # Create tier list
 rating_summary <- fit$summary(variables = "rating")
 
