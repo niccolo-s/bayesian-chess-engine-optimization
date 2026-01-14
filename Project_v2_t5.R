@@ -1,6 +1,3 @@
-# ==============================================================================
-# Task 5: Manual Tuning (Sequential Testing with Rschach)
-# ==============================================================================
 
 library(Rschach)
 library(dplyr)
@@ -10,12 +7,14 @@ library(cmdstanr)
 # 1. SETUP & PARAMETERS
 # -----------------------------------------------------------------------------
 
-# Check if the 'fit' object from Task 2 exists (required for model parameters)
-if (!exists("fit")) stop("Error: Run Task 2 first to generate the 'fit' object!")
+# Ensure 'fit' object exists (from Task 4)
+if (!exists("fit")) {
+  stop("Error: 'fit' object not found. Please run Task 2/4 code first!")
+}
 
-# Extract global parameters from the fitted Stan model
 post_sum <- fit$summary()
 
+# Extract global parameters
 global_params <- list(
   white_adv   = post_sum$mean[post_sum$variable == "white_advantage"],
   p_draw_base = post_sum$mean[post_sum$variable == "p_draw_base"],
@@ -25,187 +24,149 @@ global_params <- list(
 cat("=== Global Parameters from Stan Model ===\n")
 print(global_params)
 
-# Load the opening book (FEN strings)
+# Load Opening Book
 book_file <- "8moves_v3.epd"
 if(!file.exists(book_file)) {
-  warning("File 8moves_v3.epd not found! Using simplified start positions.")
+  warning("File '8moves_v3.epd' not found! Using fallback start position.")
   book_fen <- c("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
 } else {
-  book_fen <- read.csv(book_file, header = FALSE)[[1]]
+  book_fen <- readLines(book_file)
 }
 
+# Archive for all games
+all_games_archive <- data.frame()
+
 # -----------------------------------------------------------------------------
-# 2. SPRT FUNCTION (Consistent with Task 4 Logic)
+# 2. SPRT FUNCTION
 # -----------------------------------------------------------------------------
 
-check_sprt <- function(history, params, E0=10, alpha=0.05, beta=0.05) {
+check_sprt <- function(history, params, E0=20, alpha=0.05, beta=0.05) {
   
-  # Define SPRT Boundaries (Stop Thresholds)
-  bound_A <- log(beta / (1 - alpha))      # Threshold for H0 (New engine is NOT better)
-  bound_B <- log((1 - beta) / alpha)      # Threshold for H1 (New engine IS better)
-  LLR <- 0                                # Log-Likelihood Ratio accumulator
+  # SPRT Bounds
+  bound_A <- log(beta / (1 - alpha))      # Stop & Reject H1 (Fail)
+  bound_B <- log((1 - beta) / alpha)      # Stop & Accept H1 (Success)
+  LLR <- 0
   
-  # Retrieve parameters from the list
   white_adv   <- params$white_adv
   p_draw_base <- params$p_draw_base
   draw_scale  <- params$draw_scale
   
-  # NOTE ON TIME CONTROL (IMPORTANT):
-  # Even though games are played with a time control (e.g., 0.5+0.05),
-  # we set diff_tc = 0 here.
-  # Reason: We do not have the 'beta' parameter (time sensitivity) for the NEW engine
-  # because it hasn't been modeled yet. We assume its time management is similar 
-  # to the base engine, so the rating difference comes purely from strength, not time handling.
-  diff_tc <- 0 
-  
   for (res in history) {
-    # 'res$score' is the point result for the CHALLENGER (1=Win, 0.5=Draw, 0=Loss)
+    # res$is_white: TRUE if Challenger was White
+    # res$score: 1 (Win), 0.5 (Draw), 0 (Loss) -- from Challenger perspective
     
-    # Map result to Stan Model Outcome Indices:
-    # 1 = Black Win
-    # 2 = Draw
-    # 3 = White Win
-    outcome_idx <- 2 # Default to Draw
+    # --- Hypothesis H0: Delta = 0 (No Improvement) ---
+    # Diff = (R_White - R_Black) + Adv
+    # Under H0, R_Chal == R_Champ. So (R_W - R_B) is always 0.
+    diff_H0 <- white_adv
     
+    # --- Hypothesis H1: Delta = E0 (Improvement) ---
     if (res$is_white) {
-      # Challenger played WHITE
-      if (res$score == 1) outcome_idx <- 3 # White (Challenger) Won
-      if (res$score == 0) outcome_idx <- 1 # Black (Champion) Won
+      # Challenger is White. R_Chal = R_Champ + E0.
+      # Diff = (R_Chal - R_Champ) + Adv = E0 + Adv
+      diff_H1 <- E0 + white_adv
     } else {
-      # Challenger played BLACK
-      if (res$score == 1) outcome_idx <- 1 # Black (Challenger) Won
-      if (res$score == 0) outcome_idx <- 3 # White (Champion) Won
+      # Challenger is Black.
+      # Diff is always from White's perspective (Champion).
+      # Diff = (R_Champ - R_Chal) + Adv
+      #      = (R_Champ - (R_Champ + E0)) + Adv = -E0 + Adv
+      diff_H1 <- -E0 + white_adv
     }
     
-    # --- Hypothesis H0: No Improvement (Delta = 0) ---
-    # Under H0, the rating difference is 0.
-    if (res$is_white) {
-      # Challenger (White) vs Champion (Black)
-      # Diff = (Challenger - Champion) + adv = 0 + adv
-      diff_H0 <- 0 + diff_tc + white_adv
-    } else {
-      # Champion (White) vs Challenger (Black)
-      # Diff = (Champion - Challenger) + adv = 0 + adv
-      # Note: Even if roles are reversed, if ratings are equal, diff is 0.
-      diff_H0 <- -diff_tc + white_adv
-    }
-    
-    # --- Hypothesis H1: Improvement (Challenger is stronger by E0) ---
-    if (res$is_white) {
-      # Challenger (White) is stronger by E0
-      # Diff = E0 + adv
-      diff_H1 <- E0 + diff_tc + white_adv
-    } else {
-      # Champion (White) is weaker (Challenger is Black and stronger)
-      # Diff = (Champion - Challenger) + adv = -E0 + adv
-      diff_H1 <- -E0 - diff_tc + white_adv
-    }
-    
-    # Probability Calculation Helper (Formula from Stan Model)
+    # Probability Calculation (Task 4 Formula)
     calc_probs <- function(d) {
       exp_score <- 1 / (1 + 10^(-d / 400))
       p_draw    <- p_draw_base * exp(-abs(d) / draw_scale)
-      # Returns vector: [Prob(BlackWin), Prob(Draw), Prob(WhiteWin)]
-      c((1 - p_draw) * (1 - exp_score), p_draw, (1 - p_draw) * exp_score)
+      p_win  <- (1 - p_draw) * exp_score
+      p_loss <- (1 - p_draw) * (1 - exp_score)
+      c(p_loss, p_draw, p_win) 
     }
     
     probs_H0 <- calc_probs(diff_H0)
     probs_H1 <- calc_probs(diff_H1)
     
-    # Update LLR (Log-Likelihood Ratio)
-    # Use max(..., 1e-10) to avoid log(0) errors
+    # Outcome Index: 1=BlackWin, 2=Draw, 3=WhiteWin
+    outcome_idx <- 2 
+    if (res$is_white) {
+      if (res$score == 1) outcome_idx <- 3
+      if (res$score == 0) outcome_idx <- 1 
+    } else {
+      if (res$score == 1) outcome_idx <- 1 
+      if (res$score == 0) outcome_idx <- 3 
+    }
+    
     lik_H1 <- max(probs_H1[outcome_idx], 1e-10)
     lik_H0 <- max(probs_H0[outcome_idx], 1e-10)
     
     LLR <- LLR + log(lik_H1 / lik_H0)
   }
   
-  # Check stopping conditions
-  if (LLR >= bound_B) return("H1") # Accept H1 (Challenger is better)
-  if (LLR <= bound_A) return("H0") # Accept H0 (Challenger is not better)
-  return("Undecided")              # Continue testing
+  if (LLR >= bound_B) return("H1")
+  if (LLR <= bound_A) return("H0")
+  return("Undecided")
 }
 
 # -----------------------------------------------------------------------------
-# 3. TUNING CONFIGURATION
+# 3. TUNING LOOP
 # -----------------------------------------------------------------------------
 
-# Initial Champion (Default Stockfish with no custom parameters)
 champion_params <- list() 
-champion_name <- "Default_Stockfish"
+champion_name <- "Default_SchachMaus"
 
-# List of Candidates to test (Challengers)
-# These modify specific internal parameters (NMP, LMR, RFP)
+# Candidate Parameters
 candidates <- list(
-  list(name="V1_NMP", params=list(NMP_intercept=3, NMP_slope=0)),
+  list(name="V1_NMP", params=list(NMP_intercept=3)),
   list(name="V2_LMR", params=list(LMR_intercept=1, LMR_slope=0.5)),
-  list(name="V3_RFP", params=list(RFP_intercept=-30, RFP_slope=150)),
-  list(name="V4_Combo", params=list(NMP_intercept=3, LMR_intercept=1, RFP_intercept=-30, RFP_slope=150))
+  list(name="V3_RFP", params=list(RFP_intercept=-30, RFP_slope=150))
 )
 
-# -----------------------------------------------------------------------------
-# 4. MAIN TUNING LOOP
-# -----------------------------------------------------------------------------
-
 cat("\n=== STARTING TUNING TOURNAMENT ===\n")
-cat("SPRT Settings: E0=10, Alpha=0.05, Beta=0.05\n")
 
 final_results <- list()
 
-# Iterate through every candidate in our list
 for (cand in candidates) {
   
   cat(paste0("\n", paste(rep("-", 60), collapse=""), "\n"))
   cat(sprintf("MATCH: %s (Challenger) vs %s (Champion)\n", cand$name, champion_name))
-  cat("Testing Params:", paste(names(cand$params), cand$params, sep="=", collapse=", "), "\n")
+  cat("Params:", paste(names(cand$params), cand$params, sep="=", collapse=", "), "\n")
   
   # --- INIT ENGINES ---
   
-  # Initialize Champion Engine
+  # Initialize Champion
   if (length(champion_params) == 0) {
-    e.champ <- Engine("Stockfish") # Default settings
+    e_champ <- Engine(name = champion_name)
   } else {
-    e.champ <- Engine("Stockfish", params = champion_params) # Custom settings
+    e_champ <- Engine(name = champion_name, params = champion_params)
   }
   
-  # Initialize Challenger Engine
-  # Rschach requires parameters to be a named list
-  if (is.null(names(cand$params))) stop("Challenger parameters must be named!")
-  e.chal <- Engine("Stockfish", params = cand$params)
+  # Initialize Challenger
+  e_chal <- Engine(name = cand$name, params = cand$params)
   
-  # Reset match history for this pair
   history <- list()
   decision <- "Undecided"
-  games_played <- 0
+  max_games <- 200 
   
-  # --- GAME LOOP ---
-  # Keep playing until a decision is made or we reach the safety limit (400 games)
-  while(decision == "Undecided" && games_played < 400) {
+  # Game Loop
+  while(decision == "Undecided" && length(history) < max_games) {
     
-    # Sample a random opening position from the book
-    current_book_pos <- sample(book_fen, 1) 
+    fen <- sample(book_fen, 1)
     
-    # 1. Play a Round
-    # play.tournament automatically plays 2 games per round (swapping colors)
-    # We use tryCatch to prevent the script from crashing if the engine hangs/crashes
+    # Play 1 Round (2 games)
     res_batch <- tryCatch({
       play.tournament(
-        e.chal, e.champ,       # e.chal is Engine #1, e.champ is Engine #2
-        book = current_book_pos, 
-        nr_rounds = 1L,        # 1 Round = 2 Games (White/Black swap)
-        tc_base = 0.5,         # Time: 0.5 seconds (Very fast for testing)
-        tc_inc = 0.05           
+        e_chal, e_champ, 
+        book = fen, 
+        nr_rounds = 1L, 
+        tc_base = 0.5, tc_inc = 0.05 
       )
     }, error = function(e) {
-      cat("\nError inside play.tournament:", e$message, "\n")
+      cat("\n[Warning] Engine execution failed:", e$message, "\n")
       return(NULL)
     })
     
     if (is.null(res_batch)) { decision <- "Error"; break; }
     
-    # 2. Parse Results (Robust Fix)
-    # Sometimes Rschach returns a list of Game objects instead of a data frame.
-    # This block ensures we always work with a clean data frame.
+    # Robust Parsing
     if (!is.data.frame(res_batch)) {
       df_temp <- data.frame(white=character(), result=character(), stringsAsFactors=FALSE)
       for (g in res_batch) {
@@ -216,61 +177,53 @@ for (cand in candidates) {
       res_batch <- df_temp
     }
     
-    if (nrow(res_batch) == 0) next # Skip if empty result
+    if (nrow(res_batch) == 0) next
     
-    # 3. Update History
-    # We need to record the result from the Challenger's perspective.
-    # Logic: In Round 1, Game 1 (Index 1) -> Engine #1 (Challenger) is White.
-    #        In Round 1, Game 2 (Index 2) -> Engine #1 (Challenger) is Black.
-    
+    # Update History
     for (k in 1:nrow(res_batch)) {
-      res_str <- res_batch$result[k]
+      r_str <- res_batch$result[k]
+      is_chal_white <- (k %% 2 != 0)
       
-      # Determine if Challenger was White based on game index
-      is_chal_white <- (k %% 2 != 0) 
+      score <- 0.5 
+      if (r_str == "1-0") score <- ifelse(is_chal_white, 1, 0)
+      if (r_str == "0-1") score <- ifelse(is_chal_white, 0, 1)
       
-      # Calculate Score for Challenger
-      score <- 0.5 # Default Draw
-      if (res_str == "1-0") score <- ifelse(is_chal_white, 1, 0)
-      if (res_str == "0-1") score <- ifelse(is_chal_white, 0, 1)
-      
-      # Add to history list
       history[[length(history)+1]] <- list(is_white=is_chal_white, score=score)
+      
+      # Archive Data
+      all_games_archive <- bind_rows(all_games_archive, data.frame(
+        Round_ID = length(final_results) + 1,
+        Challenger = cand$name,
+        Champion = champion_name,
+        Is_Chal_White = is_chal_white,
+        Result = r_str,
+        Score = score,
+        Param_Set = paste(names(cand$params), cand$params, sep="=", collapse=";")
+      ))
     }
     
-    # Check SPRT status
-    games_played <- length(history)
-    decision <- check_sprt(history, params=global_params)
-    
-    # Print progress (overwrite line with \r)
-    cat(sprintf("\rGames: %d | Status: %s", games_played, decision))
+    # Check SPRT (E0=100, beta=0.2 for faster rejection)
+    decision <- check_sprt(history, params=global_params, E0=30, alpha=0.1, beta=0.1)
+    cat(sprintf("\rGames: %d | Status: %s", length(history), decision))
     flush.console()
   }
   
-  cat("\n")
+  cat("\nMatch Decision:", decision, "\n")
   
-  # --- ACTION AFTER MATCH ---
+  # Update Champion Logic
   if (decision == "H1") {
-    cat(sprintf("--> VICTORY! %s is better. Promoting to Champion.\n", cand$name))
-    # Challenger wins -> They become the new Champion for the next match
+    cat(sprintf(">>> SUCCESS! %s promotes to Champion!\n", cand$name))
     champion_params <- cand$params
     champion_name <- cand$name
-  } else if (decision == "H0") {
-    cat(sprintf("--> DEFEAT. %s failed to beat Champion.\n", cand$name))
-    # Challenger lost -> Current Champion stays
   } else {
-    cat(sprintf("--> UNDECIDED (Limit reached). Keeping current Champion.\n"))
+    cat(sprintf(">>> FAIL. %s remains Champion.\n", champion_name))
   }
   
-  # Save result for summary
-  final_results[[cand$name]] <- list(
-    decision = decision, 
-    games = games_played,
-    champion_after = champion_name
-  )
+  final_results[[cand$name]] <- decision
+  
+  Sys.sleep(0.5)
 }
 
-cat("\n=== TUNING FINISHED ===\n")
-cat("Final Champion Engine:", champion_name, "\n")
-cat("Best Parameters Found:", paste(names(champion_params), champion_params, sep="=", collapse=", "), "\n")
-
+# Save Results
+write.csv(all_games_archive, "task5_tuning_archive.csv", row.names=FALSE)
+cat("\n=== TUNING COMPLETE ===\n")
