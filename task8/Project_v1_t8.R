@@ -385,8 +385,8 @@ tournament_data <- data.frame(
 # Run MCMC
 set.seed(123)
 results <- mcmc_elo_custom(tournament_data, 
-                           n_iter = 10000,
-                           burn_in = 2000,
+                           n_iter = 100000,
+                           burn_in = 10000,
                            thin = 50,
                            n_chains = 2)
 
@@ -395,7 +395,7 @@ library(coda)
 chain1_rating <- mcmc(results[[1]]$samples$rating)
 chain2_rating <- mcmc(results[[2]]$samples$rating)
 gelman.diag(mcmc.list(chain1_rating, chain2_rating))
-# Multivariate psrf 1.02 suggests good convergence
+# Multivariate psrf 1 suggests good convergence
 
 
 # Combine samples from both chains
@@ -434,3 +434,66 @@ boxplot(combined_ratings,
         ylab = "Elo Rating",
         col = c("gray90", "lightblue", "gold", "lightgreen"),
         las = 2) # Rotate labels
+
+
+
+#### 6. Plots ####
+library(ggplot2)
+library(dplyr)
+
+# 1. Combine chains & Extract ratings
+# 'results' is the list returned by your mcmc_elo function
+combined_ratings <- rbind(results[[1]]$samples$rating, 
+                          results[[2]]$samples$rating)
+
+# Use the exact names from your script
+colnames(combined_ratings) <- c("1_Base", "2_Manual", "3_LMR_Opt", "4_RFP_Final")
+
+# 2. Calculate Summary Statistics for Plotting
+plot_data <- data.frame(
+  engine = colnames(combined_ratings),
+  mean_rating = colMeans(combined_ratings),
+  sd = apply(combined_ratings, 2, sd),
+  lower_95 = apply(combined_ratings, 2, quantile, probs = 0.025),
+  upper_95 = apply(combined_ratings, 2, quantile, probs = 0.975)
+) %>%
+  arrange(mean_rating) # Sort by rating for the plot order
+
+# Set factor levels to ensure ggplot respects the sorted order (weakest at bottom, strongest at top)
+plot_data$engine <- factor(plot_data$engine, levels = plot_data$engine)
+
+# 3. Create the Forest Plot (Blue/Lightblue style)
+p_forest_t8 <- ggplot(plot_data, aes(x = mean_rating, y = engine)) +
+  # 95% Credible Interval (Light Blue)
+  geom_errorbarh(aes(xmin = lower_95, xmax = upper_95, color = "95% CI"), 
+                 height = 0.3, linewidth = 1) +
+  
+  # Mean +/- 1 SD Interval (Darker Blue)
+  geom_errorbarh(aes(xmin = mean_rating - sd, xmax = mean_rating + sd, color = "±1 SD"), 
+                 height = 0, linewidth = 2) +
+  
+  # Mean Point
+  geom_point(size = 5, color = "darkblue") +
+  
+  # Manual Color Scale to match previous tasks
+  scale_color_manual(name = "Uncertainty", 
+                     values = c("95% CI" = "lightblue", "±1 SD" = "steelblue")) +
+  
+  # Labels and Theme
+  labs(
+    x = "Elo Rating",
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.position = "top",
+    legend.background = element_rect(color = "black", linewidth = 0.5, fill = "white"),
+    panel.grid.major.y = element_line(color = "gray90") 
+  )
+
+# Display and Save
+print(p_forest_t8)
+ggsave("task8_ratings.png", p_forest_t8, width = 8, height = 5, dpi = 300)
