@@ -25,10 +25,10 @@ To efficiently benchmark engine modifications, we implemented a Bayesian **Seque
 - **Robustness:** Validated parameter changes against a diverse opening book to ensure statistical independence.
 
 ### 4. Bayesian Parameter Optimization
-We automated the tuning of critical search parameters (LMR and RFP) using **Gaussian Processes (GP)**.
+We applied **Gaussian Process (GP)** regression to guide the tuning of critical search parameters (LMR and RFP).
 - **Surrogate Modeling:** Approximated the expensive "Elo vs. Parameter" function with a GP kernel.
-- **Acquisition Functions:** Balanced exploration and exploitation (Expected Improvement) to iteratively select the next best parameter configurations to test.
-- **Multidimensional Tuning:** Performed simultaneous 2D optimization for correlated parameters (`RFP_intercept` and `RFP_slope`).
+- **Acquisition Functions:** Used Expected Improvement (EI) to identify the most promising parameter values to test next.
+- **Iterative Process:** Manually executed the optimization loop (Tournament → GP Update → Acquisition) to refine parameters over multiple steps, culminating in a simultaneous 2D optimization for `RFP_intercept` and `RFP_slope`.
 
 ## Key Results
 
