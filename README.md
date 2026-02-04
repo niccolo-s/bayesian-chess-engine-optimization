@@ -1,84 +1,59 @@
-# Chess Engine Rating and Optimization with a Bayesian Approach (**ongoing**)
-A Bayesian statistics project for analyzing and optimizing the **SchachMaus** chess engine using Elo-based rating systems, tournament predictions, sequential testing, and Bayesian optimization.
+# Bayesian Chess Engine Optimization
 
-## Project Overview
+A comprehensive statistical framework for rating, analyzing, and optimizing the **SchachMaus** chess engine. This project implements Bayesian Elo modeling, sequential testing (SPRT), and Gaussian Process optimization to rigorously improve engine performance.
 
-This project applies Bayesian methods to chess engine evaluation and parameter tuning. The work is structured in progressive tasks, from basic rating systems to automated parameter optimization.
+**Course:** VU 105.173 Bayesian Statistics (TU Wien, Winter 2025)
 
-## Tasks
+## Project Highlights
 
-### Task 1: Tournament Ranking
-**Objective**: Build a Bayesian Elo rating system for chess engines
+The project is divided into two primary phases: **Tournament Analysis** (inferring latent skill from game data) and **Engine Optimization** (tuning internal parameters to maximize playing strength).
 
-- Implement Bayesian Elo ratings
-- Analyze game data to rank engines (A, B, C, D, E, SchachMaus)
-- Use MCMC sampling via Stan for posterior inference
-- Generate tier lists with uncertainty quantification
+### 1. Bayesian Elo Rating System
+We developed a hierarchical Bayesian model to estimate engine strength while accounting for real-world nuances:
+- **Time Control Dependence:** Modeled rating as a linear function of time control (`rating + beta * tc`), allowing predictions across formats (Bullet, Blitz, Rapid).
+- **Draw Probability:** Implemented a rating-dependent draw model where the probability of a draw decays exponentially as the skill gap increases.
+- **First-Move Advantage:** Explicitly quantified the "White advantage" in Elo terms.
 
-### Task 2: Time Control Integration
-**Objective**: Model rating dependence on time control
+### 2. Live Tournament Prediction
+Using **Sampling Importance Resampling (SIR)**, we updated our pre-computed posterior beliefs with live game results from an ongoing tournament. This allowed us to:
+- Dynamically refine rating estimates in real-time.
+- Calculate the expected utility of betting on specific tournament outcomes via Monte Carlo simulation.
 
-- Extend base model to include time control effects (linear dependence)
-- Convention: compute expected game duration as `time + 40 × increment`
-- Produce rating across different time formats (Ultra Bullet, Bullet, Blitz, Rapid)
-- Visualize rating uncertainty bands
+### 3. Sequential Testing (SPRT)
+To efficiently benchmark engine modifications, we implemented a Bayesian **Sequential Probability Ratio Test (SPRT)**.
+- **Efficiency:** Replaced fixed-length matches with a likelihood-ratio test that terminates early when sufficient evidence supports (or rejects) an Elo improvement.
+- **Robustness:** Validated parameter changes against a diverse opening book to ensure statistical independence.
 
-### Task 3: Live Tournament Prediction
-**Objective**: Predict ongoing tournament outcomes using Monte Carlo simulation
+### 4. Bayesian Parameter Optimization
+We automated the tuning of critical search parameters (LMR and RFP) using **Gaussian Processes (GP)**.
+- **Surrogate Modeling:** Approximated the expensive "Elo vs. Parameter" function with a GP kernel.
+- **Acquisition Functions:** Balanced exploration and exploitation (Expected Improvement) to iteratively select the next best parameter configurations to test.
+- **Multidimensional Tuning:** Performed simultaneous 2D optimization for correlated parameters (`RFP_intercept` and `RFP_slope`).
 
-- Given results of first 2 rounds, simulate remaining rounds of a 5-round round-robin tournament
-- Update posterior beliefs (on engines' ratings) using importance sampling based on observed results
-- Calculate probability distributions for SchachMaus's final placement
+## Key Results
 
-### Task 4: Sequential Testing
-**Objective**: Develop Bayesian sequential testing for engine comparison
+Our optimization pipeline produced **Engine 4_RFP**, which demonstrated statistically significant superiority over the baseline.
 
-- Implement Bayesian SPRT (Sequential Probability Ratio Test)
-- Test null hypothesis: `R_base - R_new ≥ E₀` (improvement threshold)
-- Determine optimal stopping criteria for game sequences
-- Relate test outcomes to established ratings
+| Parameter | Optimal Value | Description |
+| :--- | :--- | :--- |
+| **NMP Intercept** | `4` | Null Move Pruning base depth |
+| **LMR Intercept** | `1` | Late Move Reduction base |
+| **LMR Slope** | `0.3015` | Reduction scaling factor (Task 6) |
+| **RFP Intercept** | `300` | Reverse Futility Pruning margin (Task 7) |
+| **RFP Slope** | `0` | Margin scaling with depth (Task 7) |
 
-### Task 5: Manual Engine Tuning
-**Objective**: Explore parameter space using sequential testing
+*Final verification via MCMC confirmed a probability of superiority > 99% against the baseline engine.*
 
-- Use the `Rschach` package interface to SchachMaus engine
-- Test parameter configurations against baseline
-- Employ opening books to ensure game diversity
-- Document parameter effects and build initial tuning dataset
+## Methodology & Tools
 
-### Task 6: Automated Bayesian Optimization
-**Objective**: Optimize LMR slope parameter using Gaussian Process optimization
-
-- Apply Bayesian optimization after kernel selection
-- Target Late Move Reduction (LMR) slope parameter
-- Use rating models to evaluate engine configurations
-- Refine parameter selection based on tournament results
-
-## Model Specifications
-
-### Core Rating Model
-We use the typical ELO formula:
-$E_A = 1 / (1 + 10^\{((R_B - R_A) / 400)\})$
-Where `E_A` is the expected score (win rate + 0.5 × draw rate).
-
-### Time-Adjusted Ratings
-R_A(tc) = rating[A] + beta[A] × tc
-
-
-### Draw Probability
-$\mathbb{P}$(draw) = p_draw_base × exp(-|rating_diff| / draw_scale)
-
+- **Statistical Modeling:** Stan (RStan) for MCMC sampling.
+- **Optimization:** `DiceKriging` (R) for Gaussian Process regression.
+- **Engine Interface:** Custom `Rschach` package.
+- **Visualization:** `ggplot2` for posterior distributions and optimization landscapes.
 
 ## Authors
 
-- Dominik Mandić
-- Fausto Morando 
-- Niccolò Signorelli 
-- Fabio Vicig
-
-
-## Course Information
-
-**VU 105.173 Bayesian Statistics**  
-TU Wien, Winter Semester 2025  
-**Instructor**: Dr. Daniel Kapla
+*   **Dominik Mandić**
+*   **Fausto Morando**
+*   **Niccolò Signorelli**
+*   **Fabio Vicig**
